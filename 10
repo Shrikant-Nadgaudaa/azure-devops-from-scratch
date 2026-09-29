@@ -1,0 +1,1017 @@
+# 🌿 Phase 10 — First Real Azure Deployment Pipeline
+
+<p align="center">
+
+![Azure DevOps](https://img.shields.io/badge/Azure%20DevOps-Pipeline-blue?logo=azuredevops)
+![Azure](https://img.shields.io/badge/Microsoft-Azure-0078D4?logo=microsoftazure)
+![YAML](https://img.shields.io/badge/Pipeline-YAML-blue)
+![WIF](https://img.shields.io/badge/Authentication-WIF-green)
+![Azure CLI](https://img.shields.io/badge/Azure%20CLI-Deployment-informational)
+
+</p>
+
+---
+
+## 🎯 Objective
+
+इस Phase में हम पहली बार एक **real Azure deployment pipeline** बनाएँगे।
+
+हमारा लक्ष्य है:
+
+```text
+Developer
+   ↓
+Azure DevOps Repo
+   ↓
+YAML Pipeline
+   ↓
+Agent
+   ↓
+Service Connection
+   ↓
+Microsoft Entra ID / WIF
+   ↓
+Azure RBAC
+   ↓
+Azure Resource
+```
+
+इस Phase के अंत में हमारा Azure DevOps Pipeline:
+
+* Azure से authenticate करेगा
+* Azure subscription identify करेगा
+* Resource Group access verify करेगा
+* Azure में एक Storage Account create करेगा
+* बने हुए resource को वापस verify करेगा
+
+---
+
+# 🧠 पहले WHY समझो
+
+अब तक हमने अलग-अलग components सीखे:
+
+```text
+01 Organization
+        ↓
+02 Project
+        ↓
+03 Flow
+        ↓
+04 Pipeline
+        ↓
+05 Agent
+        ↓
+06 Self-hosted Agent
+        ↓
+07 Agent Pool
+        ↓
+08 Service Connection
+        ↓
+09 Entra ID + WIF
+```
+
+अब इन सभी को जोड़ेंगे।
+
+### पहले तक
+
+हमने सिर्फ theory और individual components देखे।
+
+### अब
+
+हम एक वास्तविक automation बनाएँगे।
+
+---
+
+# 🏭 Industrial Example
+
+मान लो Audix में developer ने code push किया:
+
+```text
+Developer
+   ↓
+Git Push
+   ↓
+Azure DevOps Repo
+   ↓
+Pipeline Trigger
+   ↓
+Build
+   ↓
+Test
+   ↓
+Deploy
+   ↓
+Azure
+```
+
+Developer को Azure Portal खोलकर manually resource create करने की जरूरत नहीं होनी चाहिए।
+
+Pipeline यह काम automatically कर सकती है।
+
+---
+
+# 🧩 इस Lab में क्या बनाएँगे?
+
+हम एक dedicated Resource Group use करेंगे:
+
+```text
+rg-axion-devops-lab
+```
+
+और इसमें Pipeline एक Storage Account create करेगी।
+
+Architecture:
+
+```text
+Azure DevOps
+│
+├── Project
+│
+├── Repo
+│
+└── Pipeline
+      │
+      ↓
+   Agent
+      │
+      ↓
+Service Connection
+sc-axion-azure
+      │
+      ↓
+Microsoft Entra ID
+      │
+      ↓
+Workload Identity Federation
+      │
+      ↓
+Azure RBAC
+      │
+      ↓
+rg-axion-devops-lab
+      │
+      ↓
+Storage Account
+```
+
+---
+
+# 🔐 Authentication और Authorization
+
+यहाँ एक बहुत important distinction है।
+
+## Authentication
+
+```text
+"तुम कौन हो?"
+```
+
+हमारे case में:
+
+```text
+Azure DevOps Pipeline
+        ↓
+Microsoft Entra ID
+        ↓
+WIF
+```
+
+Pipeline secret/password लेकर authenticate नहीं करेगी।
+
+---
+
+## Authorization
+
+Authentication के बाद दूसरा सवाल:
+
+```text
+"तुम्हें क्या करने की permission है?"
+```
+
+इसके लिए Azure RBAC काम करेगा।
+
+Example:
+
+```text
+Service Principal
+      ↓
+Contributor
+      ↓
+rg-axion-devops-lab
+```
+
+इसका मतलब pipeline उस Resource Group में permitted operations कर सकती है।
+
+---
+
+# 🏗️ Prerequisites
+
+इस Phase से पहले ये चीजें ready होनी चाहिए:
+
+| Component                 | Expected              |
+| ------------------------- | --------------------- |
+| Azure DevOps Organization | Ready                 |
+| Azure DevOps Project      | Ready                 |
+| Git Repo                  | Ready                 |
+| Pipeline capability       | Ready                 |
+| Agent                     | Available             |
+| Service Connection        | `sc-axion-azure`      |
+| Resource Group            | `rg-axion-devops-lab` |
+| WIF                       | Configured            |
+
+---
+
+# 🖥️ Step 1 — Azure Portal Verification
+
+सबसे पहले Azure Portal में जाएँ।
+
+### GUI Path
+
+```text
+Azure Portal
+   ↓
+Resource Groups
+   ↓
+rg-axion-devops-lab
+```
+
+Check करें कि Resource Group मौजूद है।
+
+---
+
+# 🔗 Step 2 — Service Connection Verification
+
+Azure DevOps में जाएँ:
+
+```text
+Organization
+   ↓
+Project
+   ↓
+Project Settings
+   ↓
+Service connections
+```
+
+आपको यह Service Connection दिखनी चाहिए:
+
+```text
+sc-axion-azure
+```
+
+Status:
+
+```text
+Enabled / Ready
+```
+
+---
+
+# 🧪 Step 3 — पहला Pipeline YAML
+
+Repo के root में file बनाएँ:
+
+```text
+10-first-azure-deployment.yml
+```
+
+इसका पहला उद्देश्य अभी deployment करना नहीं है।
+
+पहले हम केवल यह prove करेंगे:
+
+```text
+Pipeline
+   ↓
+Service Connection
+   ↓
+Azure
+```
+
+---
+
+## YAML — Authentication Test
+
+```yaml
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+
+- task: AzureCLI@2
+  displayName: "Verify Azure Connection"
+  inputs:
+    azureSubscription: "sc-axion-azure"
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      echo "===== Azure Account ====="
+      az account show
+
+      echo "===== Azure Resource Group ====="
+      az group show \
+        --name rg-axion-devops-lab
+```
+
+---
+
+# 🔍 YAML को समझो
+
+## `trigger`
+
+```yaml
+trigger:
+- main
+```
+
+मतलब:
+
+```text
+main branch में push
+        ↓
+Pipeline automatically trigger
+```
+
+---
+
+## `pool`
+
+```yaml
+pool:
+  vmImage: ubuntu-latest
+```
+
+इस example में हम Microsoft-hosted agent use कर रहे हैं।
+
+मतलब:
+
+```text
+Azure DevOps
+      ↓
+Microsoft-hosted Agent
+      ↓
+Pipeline Job
+```
+
+हमारे Self-hosted Agent knowledge का भी यहाँ connection समझ आता है।
+
+अगर बाद में self-hosted agent use करना हो:
+
+```yaml
+pool:
+  name: Audix-SelfHosted
+```
+
+---
+
+# 🔐 AzureCLI@2
+
+```yaml
+- task: AzureCLI@2
+```
+
+यह Azure DevOps task है जो Azure CLI commands execute कर सकता है।
+
+---
+
+# 🔗 `azureSubscription`
+
+```yaml
+azureSubscription: "sc-axion-azure"
+```
+
+यह सबसे important line है।
+
+यह बताती है:
+
+```text
+Pipeline
+   ↓
+Use this Service Connection
+   ↓
+sc-axion-azure
+```
+
+---
+
+# 🧪 `az account show`
+
+```bash
+az account show
+```
+
+यह हमें बताता है कि Pipeline किस Azure context में authenticated है।
+
+Conceptually:
+
+```text
+Pipeline
+   ↓
+WIF
+   ↓
+Entra ID
+   ↓
+Azure
+   ↓
+Subscription
+```
+
+---
+
+# 🧪 `az group show`
+
+```bash
+az group show \
+  --name rg-axion-devops-lab
+```
+
+अब सिर्फ authentication नहीं।
+
+हम authorization भी test कर रहे हैं।
+
+```text
+Can Pipeline authenticate?
+        ↓
+        YES
+        ↓
+Can Pipeline access RG?
+        ↓
+        YES
+```
+
+---
+
+# 🚀 Step 4 — Pipeline Create करना
+
+Azure DevOps में जाएँ:
+
+```text
+Project
+   ↓
+Pipelines
+   ↓
+Create Pipeline
+```
+
+फिर:
+
+```text
+Azure Repos Git
+```
+
+select करें।
+
+अपना repository select करें।
+
+फिर:
+
+```text
+Existing Azure Pipelines YAML file
+```
+
+select करें।
+
+Path:
+
+```text
+/10-first-azure-deployment.yml
+```
+
+फिर:
+
+```text
+Run
+```
+
+---
+
+# 👀 Pipeline में क्या होगा?
+
+Pipeline execution:
+
+```text
+Stage
+  ↓
+Job
+  ↓
+Agent
+  ↓
+AzureCLI@2
+  ↓
+Service Connection
+  ↓
+WIF
+  ↓
+Entra ID
+  ↓
+Azure
+```
+
+अगर सब सही है तो logs में Azure account और Resource Group information दिखाई देगी।
+
+---
+
+# 🟢 Expected Result
+
+Pipeline successful होने पर:
+
+```text
+Job
+ └── Azure Connection
+       ├── az account show ✅
+       └── az group show   ✅
+```
+
+Pipeline status:
+
+```text
+Succeeded
+```
+
+---
+
+# 🏗️ Step 5 — अब Actual Azure Deployment
+
+अब authentication test successful हो गया।
+
+अब उसी pipeline को actual resource creation के लिए extend करेंगे।
+
+Storage Account create करेंगे।
+
+Example:
+
+```text
+rg-axion-devops-lab
+        │
+        └── Storage Account
+              └── Blob Storage
+```
+
+---
+
+# ⚠️ Storage Account Name Important
+
+Azure Storage Account name:
+
+* globally unique होना चाहिए
+* lowercase होना चाहिए
+* spaces नहीं होने चाहिए
+* special characters नहीं होने चाहिए
+
+इसलिए static name रखने के बजाय हम unique suffix generate कर सकते हैं।
+
+---
+
+# 🚀 Deployment YAML
+
+```yaml
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+
+- task: AzureCLI@2
+  displayName: "Deploy Azure Storage Account"
+  inputs:
+    azureSubscription: "sc-axion-azure"
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+
+      RESOURCE_GROUP="rg-axion-devops-lab"
+      LOCATION="eastus"
+
+      STORAGE_ACCOUNT="axiondevops$(date +%s)"
+
+      echo "Resource Group: $RESOURCE_GROUP"
+      echo "Location: $LOCATION"
+      echo "Storage Account: $STORAGE_ACCOUNT"
+
+      echo "===== Creating Storage Account ====="
+
+      az storage account create \
+        --name "$STORAGE_ACCOUNT" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$LOCATION" \
+        --sku Standard_LRS \
+        --allow-blob-public-access false
+
+      echo "===== Verifying Storage Account ====="
+
+      az storage account show \
+        --name "$STORAGE_ACCOUNT" \
+        --resource-group "$RESOURCE_GROUP" \
+        --output table
+```
+
+---
+
+# 🧠 यहाँ क्या हुआ?
+
+Pipeline ने:
+
+```text
+1. Resource Group identify किया
+        ↓
+2. Location identify किया
+        ↓
+3. Unique Storage Account name बनाया
+        ↓
+4. Azure CLI execute किया
+        ↓
+5. Azure Storage Account create किया
+        ↓
+6. Resource वापस query करके verify किया
+```
+
+---
+
+# 🔄 Complete Flow
+
+```text
+Developer
+   │
+   │ git push
+   ↓
+Azure DevOps Repo
+   │
+   ↓
+Pipeline
+   │
+   ↓
+Agent
+   │
+   ↓
+AzureCLI@2
+   │
+   ↓
+Service Connection
+   │
+   ↓
+WIF
+   │
+   ↓
+Microsoft Entra ID
+   │
+   ↓
+Service Principal
+   │
+   ↓
+Azure RBAC
+   │
+   ↓
+Resource Group
+   │
+   ↓
+Storage Account
+```
+
+---
+
+# 🔥 सबसे Important Concept
+
+यहाँ **Agent ने Azure permission नहीं दी।**
+
+Agent का काम है:
+
+```text
+Commands execute करना
+```
+
+Service Connection का काम है:
+
+```text
+Azure authentication/trust establish करना
+```
+
+Microsoft Entra ID का काम:
+
+```text
+Identity establish करना
+```
+
+Azure RBAC का काम:
+
+```text
+Authorization देना
+```
+
+Azure Resource का काम:
+
+```text
+Actual infrastructure provide करना
+```
+
+इसलिए:
+
+```text
+Agent ≠ Identity
+Agent ≠ Permission
+Agent ≠ Service Connection
+```
+
+---
+
+# 🧩 Authentication vs Authorization — Final Mental Model
+
+```text
+                  PIPELINE
+                     │
+                     ↓
+                  AGENT
+                     │
+                     ↓
+             SERVICE CONNECTION
+                     │
+                     ↓
+                  WIF
+                     │
+                     ↓
+              ENTRA ID
+                     │
+                Authentication
+                     │
+                     ↓
+               Service Principal
+                     │
+                     ↓
+                 Azure RBAC
+                     │
+                Authorization
+                     │
+                     ↓
+              Azure Resource
+```
+
+---
+
+# 🛠️ Intentional Failure Test
+
+अब एक बहुत useful troubleshooting exercise करेंगे।
+
+मान लो Service Principal के पास Resource Group में permission नहीं है।
+
+तब:
+
+```text
+Authentication
+      ↓
+      ✅
+Authorization
+      ↓
+      ❌
+```
+
+Pipeline Azure तक पहुँच सकती है लेकिन resource operation fail होगा।
+
+इससे हमें difference practically समझ आएगा:
+
+```text
+Authentication successful
++
+Authorization failed
+```
+
+यह production troubleshooting में बहुत important है।
+
+---
+
+# 🔍 Failure Matrix
+
+| Error Situation              | Possible Area               |
+| ---------------------------- | --------------------------- |
+| Service Connection not found | ADO configuration           |
+| WIF token error              | Entra/WIF                   |
+| Authentication failed        | Identity/Service Connection |
+| AuthorizationFailed          | Azure RBAC                  |
+| Resource Group not found     | Resource/Scope              |
+| Storage name unavailable     | Global naming               |
+| Agent unavailable            | Agent/Pool                  |
+| Pipeline waiting             | Parallel jobs/capacity      |
+| Azure CLI command failed     | CLI/resource configuration  |
+
+---
+
+# 🧹 Cleanup
+
+Lab पूरा होने के बाद Storage Account delete कर सकते हैं।
+
+Azure CLI:
+
+```bash
+az storage account delete \
+  --name <STORAGE_ACCOUNT_NAME> \
+  --resource-group rg-axion-devops-lab \
+  --yes
+```
+
+अगर पूरा Resource Group केवल इसी lab के लिए बनाया गया है और उसमें कोई दूसरा required resource नहीं है, तो पूरे Resource Group को हटाने का विकल्प भी है:
+
+```bash
+az group delete \
+  --name rg-axion-devops-lab \
+  --yes
+```
+
+⚠️ Production Resource Group पर ऐसा command बिना verification के कभी नहीं चलाना चाहिए।
+
+---
+
+# 🏭 Industrial Version
+
+Real organization में architecture कुछ ऐसा हो सकता है:
+
+```text
+                    Azure DevOps
+                         │
+                 ┌───────┴───────┐
+                 │               │
+              Build            Deploy
+                 │               │
+                 ↓               ↓
+               Agent        Service Connection
+                                 │
+                                 ↓
+                              WIF
+                                 │
+                                 ↓
+                             Entra ID
+                                 │
+                                 ↓
+                             Azure RBAC
+                                 │
+                  ┌──────────────┼──────────────┐
+                  ↓              ↓              ↓
+                 DEV            UAT            PROD
+                  │              │              │
+                  ↓              ↓              ↓
+                Azure          Azure          Azure
+```
+
+Production में अलग identities/service connections और least-privilege scopes रखना सामान्य security practice है।
+
+---
+
+# 🔐 Security Best Practices
+
+### ❌ ऐसा नहीं
+
+```text
+Password → YAML
+Client Secret → Git
+PAT → README
+Azure credentials → source code
+```
+
+### ✅ ऐसा
+
+```text
+Pipeline
+   ↓
+Service Connection
+   ↓
+WIF
+   ↓
+Entra ID
+   ↓
+RBAC
+```
+
+और:
+
+```text
+Least Privilege
++
+Separate Environments
++
+Controlled Deployments
++
+Audit Logs
+```
+
+---
+
+# 📌 इस Phase में हमने क्या सीखा?
+
+| Component          | हमारा काम             |
+| ------------------ | --------------------- |
+| Repo               | YAML store किया       |
+| Pipeline           | Automation workflow   |
+| Agent              | YAML execute किया     |
+| Service Connection | Azure connection      |
+| WIF                | Secretless trust      |
+| Entra ID           | Workload identity     |
+| RBAC               | Permission            |
+| Azure CLI          | Azure operation       |
+| Resource Group     | Deployment scope      |
+| Storage Account    | Actual Azure resource |
+
+---
+
+# 🧠 Final Mental Model
+
+अब पूरा Azure DevOps foundation इस तरह याद रखो:
+
+```text
+Organization
+      ↓
+Project
+      ↓
+Repo
+      ↓
+Pipeline
+      ↓
+Agent Pool
+      ↓
+Agent
+      ↓
+Service Connection
+      ↓
+Entra ID / WIF
+      ↓
+RBAC
+      ↓
+Azure Resource
+```
+
+और सबसे important:
+
+```text
+ADO Pipeline
+     │
+     ├── WHAT to do
+     │
+     ↓
+Agent
+     │
+     ├── WHERE to execute commands
+     │
+     ↓
+Service Connection
+     │
+     ├── HOW to authenticate to Azure
+     │
+     ↓
+Entra ID + WIF
+     │
+     ├── WHO is calling
+     │
+     ↓
+Azure RBAC
+     │
+     ├── WHAT is allowed
+     │
+     ↓
+Azure Resource
+```
+
+---
+
+# 🎯 Phase 10 Completion Checklist
+
+* [ ] `rg-axion-devops-lab` verified
+* [ ] `sc-axion-azure` verified
+* [ ] YAML pipeline created
+* [ ] Pipeline connected to Repo
+* [ ] Agent executed pipeline
+* [ ] Azure authentication verified
+* [ ] Resource Group access verified
+* [ ] Storage Account created
+* [ ] Storage Account verified
+* [ ] Cleanup understood
+* [ ] Authentication vs Authorization understood
+
+---
+
+# 🚀 Next Phase
+
+अब हम manually Azure CLI से resource create करने से आगे जाएँगे।
+
+### Phase 11
+
+```text
+Azure DevOps
+      ↓
+Pipeline
+      ↓
+Agent
+      ↓
+Service Connection
+      ↓
+Terraform
+      ↓
+Terraform Plan
+      ↓
+Terraform Apply
+      ↓
+Azure Infrastructure
+```
+
+यानी अब हमारी existing **Terraform knowledge** और Azure DevOps Pipeline को जोड़ेंगे।
+
+यहाँ से हम proper **Infrastructure as Code (IaC) CI/CD** शुरू करेंगे।

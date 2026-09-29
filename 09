@@ -1,0 +1,1468 @@
+# 🔐 Phase 09 — Microsoft Entra ID + Workload Identity Federation
+
+<p align="center">
+
+![Microsoft Entra ID](https://img.shields.io/badge/Microsoft-Entra%20ID-0078D4?style=for-the-badge)
+![Identity](https://img.shields.io/badge/Identity-Application%20Identity-68217A?style=for-the-badge)
+![WIF](https://img.shields.io/badge/WIF-Workload%20Identity%20Federation-107C10?style=for-the-badge)
+![Security](https://img.shields.io/badge/Security-Zero%20Secret-0A66C2?style=for-the-badge)
+
+</p>
+
+---
+
+## 🎯 Objective
+
+इस phase में हम Azure DevOps Service Connection के पीछे काम करने वाली **Microsoft Entra ID identity architecture** को deeply समझेंगे।
+
+हम जानेंगे:
+
+* Microsoft Entra ID क्या है?
+* App Registration क्या है?
+* Application Object क्या है?
+* Service Principal क्या है?
+* Enterprise Application क्या है?
+* Client ID क्या है?
+* Object ID / Principal ID क्या है?
+* Tenant ID क्या है?
+* Managed Identity और App Registration में difference
+* Federated Identity Credential क्या है?
+* Issuer क्या है?
+* Subject क्या है?
+* Audience क्या है?
+* WIF token exchange कैसे होता है?
+* Azure DevOps Service Connection इसमें कहाँ आती है?
+* Azure RBAC कहाँ आता है?
+* Authentication और Authorization पूरा flow
+* Portal में actual objects कैसे verify करें
+* Troubleshooting
+
+---
+
+# 🧠 1. सबसे पहले — Microsoft Entra ID क्या है?
+
+**Microsoft Entra ID** Microsoft का cloud-based identity and access management platform है।
+
+Simple language में:
+
+> **Entra ID यह decide करने में मदद करता है कि कौन identity है और identity को authentication/authorization कैसे दिया जाए।**
+
+हमारे Azure DevOps scenario में:
+
+```text
+Azure DevOps Pipeline
+        │
+        ▼
+Microsoft Entra ID
+        │
+        ▼
+Identity
+        │
+        ▼
+Azure RBAC
+        │
+        ▼
+Azure Resource
+```
+
+---
+
+# 🏢 2. Real-Life Example
+
+मान लो एक office है:
+
+```text
+🏢 AUDIX Office
+│
+├── Employee
+├── Security Guard
+├── Application
+└── Automation System
+```
+
+Security guard पूछता है:
+
+> "तुम कौन हो?"
+
+यह authentication है।
+
+फिर:
+
+> "तुम्हें कौन से room में जाने की permission है?"
+
+यह authorization है।
+
+Azure में:
+
+```text
+Entra ID
+   ↓
+Identity
+   ↓
+Authentication
+   ↓
+RBAC
+   ↓
+Authorization
+```
+
+---
+
+# 🧩 3. Human Identity vs Workload Identity
+
+Azure में identity केवल इंसान नहीं होता।
+
+दो broad examples:
+
+```text
+Human
+  ↓
+Shrikant
+
+Workload
+  ↓
+Azure DevOps Pipeline
+```
+
+Pipeline को भी Azure resources access करने के लिए identity चाहिए।
+
+इसे:
+
+> **Workload Identity**
+
+कहा जा सकता है।
+
+---
+
+# 🔥 4. हमारा Actual Scenario
+
+हमारा पूरा flow:
+
+```text
+Developer
+    │
+    ▼
+Git Repository
+    │
+    ▼
+Azure DevOps Pipeline
+    │
+    ▼
+Service Connection
+    │
+    ▼
+Workload Identity Federation
+    │
+    ▼
+Microsoft Entra ID
+    │
+    ▼
+Application Identity
+    │
+    ▼
+Azure RBAC
+    │
+    ▼
+Azure Resource
+```
+
+अब इस diagram के हर box को खोलेंगे।
+
+---
+
+# 🧠 5. App Registration क्या है?
+
+जब हम Microsoft Entra में application register करते हैं, तो Entra उस application के लिए एक **application object** बनाता है।
+
+Simple:
+
+```text
+App Registration
+       │
+       ▼
+Application Object
+```
+
+यह application की identity configuration का blueprint है।
+
+Microsoft documentation के अनुसार application object application की global definition/blueprint होता है, जबकि service principal उसका tenant-specific representation होता है।
+
+---
+
+# 🏗️ 6. Application Object को Blueprint समझो
+
+Real-life:
+
+```text
+🏗️ Building Blueprint
+       │
+       ├── Building structure
+       ├── Rooms
+       └── Design
+```
+
+Azure:
+
+```text
+Application Object
+       │
+       ├── Application configuration
+       ├── Authentication settings
+       └── Identity configuration
+```
+
+लेकिन यह actual Azure permission नहीं देता।
+
+---
+
+# 🧠 7. Service Principal क्या है?
+
+अब सबसे important difference।
+
+> **Service Principal उस application की tenant-specific identity/instance है जिसका उपयोग Azure/Entra में access और permissions के लिए किया जा सकता है।**
+
+Diagram:
+
+```text
+Application Object
+       │
+       ▼
+Service Principal
+       │
+       ▼
+Tenant-specific Identity
+```
+
+Microsoft के अनुसार service principal application object का local representation है और specific tenant में application को security principal के रूप में represent करता है।
+
+---
+
+# 🧩 8. App Registration vs Service Principal
+
+बहुत simple table:
+
+| Object                 | Meaning                                      |
+| ---------------------- | -------------------------------------------- |
+| App Registration       | Application definition / blueprint           |
+| Application Object     | App की global definition                     |
+| Service Principal      | Tenant में उस app की local identity          |
+| Enterprise Application | Portal में service principal management view |
+
+Mental model:
+
+```text
+                Application
+                     │
+                     ▼
+             Application Object
+                     │
+                     ▼
+              Service Principal
+                     │
+                     ▼
+              Azure Permissions
+```
+
+---
+
+# 🏢 9. Enterprise Application क्या है?
+
+Azure Portal / Microsoft Entra admin center में:
+
+```text
+Microsoft Entra ID
+   ↓
+Enterprise applications
+```
+
+यहाँ application के **service principal objects** manage/view किए जाते हैं।
+
+Microsoft documentation के अनुसार Enterprise Applications blade में service principals दिखाई देते हैं।
+
+इसलिए:
+
+```text
+App registrations
+       ↓
+Application Objects
+
+Enterprise applications
+       ↓
+Service Principals
+```
+
+यह distinction बहुत important है।
+
+---
+
+# 🔥 10. पूरा Relationship
+
+```text
+                 APP REGISTRATION
+                        │
+                        ▼
+                APPLICATION OBJECT
+                        │
+                        │ creates/represents
+                        ▼
+                 SERVICE PRINCIPAL
+                        │
+                        ▼
+               ENTERPRISE APPLICATION
+                        │
+                        ▼
+                    RBAC
+                        │
+                        ▼
+                     Azure
+```
+
+---
+
+# 🆔 11. Client ID क्या है?
+
+App Registration create करने पर हमें एक:
+
+```text
+Application (client) ID
+```
+
+मिलती है।
+
+Example:
+
+```text
+xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+यह application की पहचान करने वाली ID है।
+
+Mental model:
+
+```text
+Client ID
+   ↓
+"कौन सा application?"
+```
+
+---
+
+# 🆔 12. Tenant ID क्या है?
+
+Microsoft Entra tenant की unique identifier:
+
+```text
+Tenant ID
+```
+
+Mental model:
+
+```text
+Tenant ID
+   ↓
+"कौन सा Entra Directory?"
+```
+
+Example:
+
+```text
+Tenant
+   │
+   └── Tenant ID
+```
+
+---
+
+# 🆔 13. Object ID / Principal ID क्या है?
+
+यहाँ beginners अक्सर confuse होते हैं।
+
+Service Principal का एक:
+
+```text
+Object ID
+```
+
+होता है।
+
+Azure RBAC assignment में अक्सर जिस identity को role दिया जाता है, उसके principal/object identifier से संबंधित ID दिखाई देती है।
+
+Simple:
+
+```text
+Client ID
+=
+Application को identify करता है
+
+Principal/Object ID
+=
+Tenant में identity object को identify करता है
+```
+
+---
+
+# 🧠 14. तीन IDs याद रखो
+
+| ID                  | Simple Meaning                    |
+| ------------------- | --------------------------------- |
+| Tenant ID           | कौन सा Entra Directory            |
+| Client ID           | कौन सा Application                |
+| Object/Principal ID | Tenant में कौन सा Identity Object |
+
+Diagram:
+
+```text
+Tenant ID
+   │
+   ▼
+Entra Directory
+   │
+   └── Client ID
+          │
+          ▼
+      Application
+          │
+          ▼
+    Service Principal
+          │
+          ▼
+   Principal/Object ID
+```
+
+---
+
+# 🚨 15. Client ID ≠ Object ID
+
+यह interview में पूछा जा सकता है।
+
+```text
+Client ID
+→ Application identity identifier
+
+Object ID
+→ Specific directory object identifier
+```
+
+इसलिए दोनों को interchangeably use मत करना।
+
+---
+
+# 🧠 16. Managed Identity कहाँ आती है?
+
+Managed Identity भी workload identity का एक तरीका है।
+
+Common types:
+
+```text
+System-assigned
+User-assigned
+```
+
+लेकिन App Registration और Managed Identity same object model नहीं हैं।
+
+Important distinction:
+
+```text
+App Registration
+→ Application Object
+→ Service Principal
+```
+
+Managed Identity:
+
+```text
+Managed Identity
+→ Service Principal
+```
+
+Microsoft documentation explicitly बताती है कि managed identities में application object नहीं होता; वे service principal object के रूप में represented होती हैं।
+
+---
+
+# 🆚 17. App Registration vs Managed Identity
+
+| Feature                         | App Registration | Managed Identity |
+| ------------------------------- | ---------------- | ---------------- |
+| Application Object              | Yes              | No               |
+| Service Principal               | Yes              | Yes              |
+| Azure-managed credentials       | Not inherently   | Yes              |
+| WIF                             | Yes              | Yes              |
+| User-assigned reusable identity | No               | Yes              |
+| Application configuration       | Rich             | Different model  |
+
+---
+
+# 🚀 18. अब आता है WIF
+
+**Workload Identity Federation**
+
+का उद्देश्य है:
+
+> External workload को long-lived secret store किए बिना Microsoft Entra protected resources तक identity-based access देना।
+
+Microsoft Entra documentation WIF को external identity provider और Entra application या user-assigned managed identity के बीच trust relationship के रूप में describe करती है।
+
+---
+
+# 🔐 19. Traditional Secret Model
+
+पुराना architecture:
+
+```text
+Pipeline
+   │
+   ▼
+Client ID
+   +
+Client Secret
+   │
+   ▼
+Microsoft Entra
+   │
+   ▼
+Azure
+```
+
+Problem:
+
+```text
+Secret
+ ↓
+Store
+ ↓
+Protect
+ ↓
+Rotate
+ ↓
+Expire
+ ↓
+Replace
+```
+
+---
+
+# 🔥 20. WIF Model
+
+Modern architecture:
+
+```text
+Pipeline
+   │
+   ▼
+Federated Identity
+   │
+   ▼
+Microsoft Entra
+   │
+   ▼
+Access Token
+   │
+   ▼
+Azure
+```
+
+WIF secret-less federation model देता है; external workload token exchange के जरिए Entra access token प्राप्त कर सकता है।
+
+---
+
+# 🧩 21. Federated Identity Credential
+
+अब actual bridge:
+
+```text
+External Workload
+        │
+        ▼
+External Token
+        │
+        ▼
+Federated Identity Credential
+        │
+        ▼
+Microsoft Entra
+        │
+        ▼
+Access Token
+```
+
+Federated Identity Credential Entra को बताती है:
+
+> कौन से external token को इस application/managed identity के लिए trust करना है।
+
+---
+
+# 🔥 22. WIF के तीन Important Values
+
+Federated Identity Credential में important values:
+
+```text
+Issuer
+Subject
+Audience
+```
+
+Microsoft Entra इन values को incoming token के claims से match करता है। ये matching case-sensitive होती है।
+
+---
+
+# 🌐 23. Issuer क्या है?
+
+Simple:
+
+> **Token किस Identity Provider ने issue किया?**
+
+Mental model:
+
+```text
+Issuer
+   ↓
+"Token कहाँ से आया?"
+```
+
+---
+
+# 🧾 24. Subject क्या है?
+
+Simple:
+
+> **External workload कौन है?**
+
+Mental model:
+
+```text
+Subject
+   ↓
+"कौन सा workload?"
+```
+
+यह service connection-specific identity/trust configuration में बहुत important होता है।
+
+---
+
+# 🎯 25. Audience क्या है?
+
+Simple:
+
+> **Token किस service के लिए intended है?**
+
+Microsoft Entra federation scenarios में global cloud के लिए commonly:
+
+```text
+api://AzureADTokenExchange
+```
+
+audience use होती है, scenario के अनुसार।
+
+---
+
+# 🧠 26. Issuer + Subject + Audience
+
+याद रखने का सबसे आसान तरीका:
+
+```text
+Issuer
+=
+किसने token दिया?
+
+Subject
+=
+किस workload के लिए?
+
+Audience
+=
+किसके लिए token है?
+```
+
+---
+
+# 🔥 27. Token Exchange
+
+अब actual authentication flow:
+
+```text
+Azure DevOps
+      │
+      │ External/Workload Token
+      ▼
+Microsoft Entra ID
+      │
+      │ Check:
+      │ Issuer
+      │ Subject
+      │ Audience
+      ▼
+Federated Credential Match
+      │
+      ▼
+Identity Accepted
+      │
+      ▼
+Azure Access Token
+```
+
+Microsoft Entra documented flow में external token की federation credential values के साथ validation के बाद access token issue किया जाता है।
+
+---
+
+# 🏗️ 28. Azure DevOps Service Connection कहाँ आती है?
+
+अब पूरा picture:
+
+```text
+Azure DevOps
+     │
+     ▼
+Pipeline
+     │
+     ▼
+Service Connection
+     │
+     ▼
+WIF Configuration
+     │
+     ▼
+Microsoft Entra
+     │
+     ▼
+Application / Managed Identity
+     │
+     ▼
+Federated Credential
+     │
+     ▼
+Access Token
+     │
+     ▼
+Azure RBAC
+     │
+     ▼
+Azure Resource
+```
+
+---
+
+# 🧠 29. 2026 Important Change — Entra Issuer
+
+Current Azure DevOps behavior में newly created WIF service connections Microsoft Entra issuer use करती हैं।
+
+Microsoft ने बताया है कि नया implementation Entra-issued ID tokens use करता है और newly created service connections के लिए यह rollout हो चुका है।
+
+Current troubleshooting documentation new service connections के लिए Entra issuer को:
+
+```text
+https://login.microsoftonline.com/<tenant-id>/v2.0
+```
+
+format में दिखाती है।
+
+---
+
+# ⚠️ 30. पुराने Azure DevOps Issuer का क्या?
+
+पुराने WIF service connections में Azure DevOps issuer मिल सकता है:
+
+```text
+https://vstoken.dev.azure.com/...
+```
+
+Microsoft ने Azure DevOps issuer को deprecated किया है और retirement:
+
+```text
+1 July 2027
+```
+
+scheduled है।
+
+इसलिए नए labs में **Microsoft Entra issuer** वाला model सीखना बेहतर है।
+
+---
+
+# 🧪 31. HANDS-ON — App Registration देखना
+
+अब portal में actual objects देखेंगे।
+
+Open:
+
+```text
+Azure Portal
+   ↓
+Microsoft Entra ID
+   ↓
+App registrations
+```
+
+फिर:
+
+```text
+Owned applications
+```
+
+या:
+
+```text
+All applications
+```
+
+में अपनी Service Connection से related application search करो।
+
+---
+
+# 🔎 32. App Registration में क्या देखना है?
+
+Application खोलने के बाद:
+
+```text
+Overview
+```
+
+में इन values को identify करो:
+
+```text
+Application (client) ID
+Directory (tenant) ID
+Object ID
+```
+
+Concept:
+
+```text
+Application (client) ID
+        ↓
+       App
+
+Directory (tenant) ID
+        ↓
+      Tenant
+
+Object ID
+        ↓
+Application Object
+```
+
+---
+
+# 🧪 33. Enterprise Application देखना
+
+अब:
+
+```text
+Microsoft Entra ID
+   ↓
+Enterprise applications
+   ↓
+All applications
+```
+
+Service Connection से associated application/service principal को search करो।
+
+यहाँ तुम्हें service principal side दिखाई देगी।
+
+Microsoft documentation के अनुसार Enterprise Applications में tenant-local service principal objects manage किए जाते हैं।
+
+---
+
+# 🔥 34. App Registration और Enterprise Application साथ में
+
+Mental model:
+
+```text
+App registrations
+       │
+       ▼
+Application Object
+       │
+       │
+       ▼
+Enterprise applications
+       │
+       ▼
+Service Principal
+```
+
+दोनों को देखकर confusion नहीं होना चाहिए।
+
+---
+
+# 🧪 35. Federated Credential देखना
+
+App Registration में:
+
+```text
+Certificates & secrets
+       ↓
+Federated credentials
+```
+
+अगर Service Connection App Registration based है तो यहाँ federation configuration देखी जा सकती है।
+
+Expected conceptual information:
+
+```text
+Name
+Issuer
+Subject
+Audience
+```
+
+---
+
+# 🔍 36. Issuer को ध्यान से देखो
+
+नए Entra-issuer based WIF connection में issuer tenant-based Entra URL हो सकता है:
+
+```text
+https://login.microsoftonline.com/<TENANT-ID>/v2.0
+```
+
+Exact value हमेशा portal में दिखाई गई configuration से verify करो।
+
+---
+
+# 🔍 37. Subject को ध्यान से देखो
+
+Subject external workload identity को identify करता है।
+
+Azure DevOps WIF implementation के version/type के आधार पर subject format अलग हो सकता है।
+
+इसलिए:
+
+```text
+❌ Subject manually guess मत करो
+```
+
+हमेशा:
+
+```text
+Azure DevOps Service Connection
+        ↓
+Workload Identity Federation details
+        ↓
+Copy exact Subject
+```
+
+Microsoft की service-connection documentation manual WIF setup में Azure DevOps से **Issuer** और **Subject identifier** लेने को कहती है।
+
+---
+
+# 🧠 38. Why Exact Matching?
+
+मान लो:
+
+```text
+Configured Subject:
+ABC123
+```
+
+लेकिन incoming token:
+
+```text
+ABC124
+```
+
+तो:
+
+```text
+ABC123 ≠ ABC124
+```
+
+Trust match नहीं होगा।
+
+Result:
+
+```text
+❌ Token Exchange Failed
+```
+
+Microsoft Entra federation matching case-sensitive होती है।
+
+---
+
+# 🧪 39. RBAC देखना
+
+अब वापस Azure Resource Group:
+
+```text
+Resource Group
+   ↓
+Access control (IAM)
+   ↓
+Role assignments
+```
+
+Identity search करो।
+
+Example:
+
+```text
+Role:
+Contributor
+
+Scope:
+rg-axion-devops-lab
+```
+
+Architecture:
+
+```text
+Service Principal
+       │
+       ▼
+Contributor
+       │
+       ▼
+rg-axion-devops-lab
+```
+
+---
+
+# 🔥 40. Authentication और Authorization अलग-अलग Verify करो
+
+### Authentication
+
+Check:
+
+```text
+WIF
+ ↓
+Entra
+ ↓
+Identity
+ ↓
+Token
+```
+
+### Authorization
+
+Check:
+
+```text
+Identity
+ ↓
+RBAC
+ ↓
+Resource
+```
+
+अगर Pipeline fail होती है तो पहले determine करो:
+
+```text
+Authentication problem?
+          OR
+Authorization problem?
+```
+
+---
+
+# 🧪 41. Practical Verification Pipeline
+
+हमारी previous phase वाली test pipeline:
+
+```yaml
+steps:
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'sc-axion-azure'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az account show
+```
+
+Flow:
+
+```text
+Pipeline
+   ↓
+Service Connection
+   ↓
+WIF
+   ↓
+Entra
+   ↓
+Azure Token
+   ↓
+Azure CLI
+   ↓
+az account show
+```
+
+अगर यह successful है तो authentication path working है।
+
+---
+
+# 🧪 42. Resource Authorization Test
+
+अब:
+
+```yaml
+steps:
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'sc-axion-azure'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az group show \
+        --name rg-axion-devops-lab \
+        -o table
+```
+
+अगर यह successful है:
+
+```text
+Authentication ✅
+Authorization  ✅
+Resource       ✅
+```
+
+---
+
+# ❌ 43. Authentication Failure
+
+Example:
+
+```text
+AADSTS70025
+Client application has no configured federated identity credentials
+```
+
+Meaning:
+
+```text
+App
+ ↓
+Federated Credential
+ ↓
+❌ Missing
+```
+
+Microsoft's troubleshooting documentation specifically identifies missing federated credentials as a cause of this error.
+
+---
+
+# ❌ 44. Issuer / Subject Mismatch
+
+Possible error:
+
+```text
+No matching federated identity record found
+```
+
+Check:
+
+```text
+Issuer
+Subject
+```
+
+Microsoft documentation specifically recommends checking whether the issuer URL or federation subject matches.
+
+---
+
+# ❌ 45. WIF Disabled / Restricted
+
+अगर tenant policy federation को block कर रही है तो authentication fail हो सकती है।
+
+Check:
+
+```text
+Microsoft Entra
+   ↓
+Tenant policies
+   ↓
+Workload Identity Federation
+```
+
+Microsoft troubleshooting guidance AADSTS700223 / AADSTS700238 जैसे errors के लिए tenant federation restrictions check करने को कहती है।
+
+---
+
+# ❌ 46. Authentication Successful लेकिन Authorization Failed
+
+Example:
+
+```text
+AAD authentication ✅
+Azure RBAC ❌
+```
+
+Error:
+
+```text
+AuthorizationFailed
+```
+
+इस case में check करो:
+
+```text
+Identity
+ ↓
+Role Assignment
+ ↓
+Scope
+ ↓
+Target Resource
+```
+
+---
+
+# 🧠 47. पूरा Troubleshooting Flow
+
+```text
+Pipeline Failed
+      │
+      ▼
+Service Connection
+      │
+      ▼
+Authentication?
+   /          \
+ No            Yes
+ │              │
+ ▼              ▼
+Check WIF     Check RBAC
+ │              │
+ ▼              ▼
+Issuer        Role
+Subject       Scope
+Audience      Resource
+Credential
+```
+
+---
+
+# 🏭 48. Industrial Architecture
+
+अब AUDIX production example:
+
+```text
+                         🏢 AUDIX
+                            │
+                            ▼
+                    Azure DevOps Org
+                            │
+                            ▼
+                         Project
+                            │
+                            ▼
+                         Pipeline
+                            │
+                            ▼
+                  Service Connection
+                            │
+                            ▼
+               Workload Identity Federation
+                            │
+                            ▼
+                    Microsoft Entra ID
+                            │
+                  ┌─────────┴─────────┐
+                  ▼                   ▼
+          Application Identity   Managed Identity
+                  │
+                  ▼
+          Federated Credential
+                  │
+                  ▼
+                 RBAC
+                  │
+                  ▼
+              Azure Scope
+                  │
+          ┌───────┼────────┐
+          ▼       ▼        ▼
+         VM      VNet    Storage
+```
+
+---
+
+# 🔥 49. सबसे Important Mental Model
+
+इसको याद कर लिया तो पूरा topic clear:
+
+```text
+APP REGISTRATION
+       ↓
+APPLICATION OBJECT
+       ↓
+SERVICE PRINCIPAL
+       ↓
+FEDERATED CREDENTIAL
+       ↓
+WORKLOAD TOKEN
+       ↓
+MICROSOFT ENTRA
+       ↓
+ACCESS TOKEN
+       ↓
+AZURE RBAC
+       ↓
+AZURE RESOURCE
+```
+
+---
+
+# 🧠 50. Six Terms जो कभी confuse नहीं करने
+
+| Term                 | याद रखने का तरीका                 |
+| -------------------- | --------------------------------- |
+| Tenant ID            | कौन सा Entra directory            |
+| Client ID            | कौन सा application                |
+| Object ID            | कौन सा directory object           |
+| Service Principal    | App की tenant identity            |
+| Federated Credential | External token पर trust rule      |
+| RBAC                 | Azure में क्या करने की permission |
+
+---
+
+# 🎤 51. Interview Questions
+
+### Q1. App Registration क्या है?
+
+Microsoft Entra में application identity/configuration का definition/application object।
+
+---
+
+### Q2. Service Principal क्या है?
+
+Application का tenant-specific security principal/identity representation।
+
+---
+
+### Q3. Enterprise Application क्या है?
+
+Microsoft Entra admin center में tenant के service principal objects को manage/view करने वाला experience।
+
+---
+
+### Q4. Client ID क्या है?
+
+Application की identifier।
+
+---
+
+### Q5. Tenant ID क्या है?
+
+Microsoft Entra directory की identifier।
+
+---
+
+### Q6. Object ID क्या है?
+
+Specific directory object की identifier।
+
+---
+
+### Q7. WIF क्या solve करता है?
+
+External workloads को supported scenarios में long-lived secrets manage किए बिना Entra-protected resources तक identity-based access देने में मदद करता है।
+
+---
+
+### Q8. Federated Credential क्या करती है?
+
+External token के claims को trusted identity configuration से match करके token exchange की अनुमति देती है।
+
+---
+
+### Q9. Issuer क्या है?
+
+External token का issuing identity provider।
+
+---
+
+### Q10. Subject क्या है?
+
+External workload की identity identifier।
+
+---
+
+### Q11. Audience क्या है?
+
+Token का intended audience/resource identifier।
+
+---
+
+### Q12. WIF के बाद RBAC की जरूरत क्यों?
+
+क्योंकि authentication यह साबित करती है कि workload कौन है; Azure RBAC यह निर्धारित करता है कि उस identity को Azure resources पर क्या करने की permission है।
+
+---
+
+# 🚦 52. हमारे Azure DevOps Learning Journey में Position
+
+अब तक architecture:
+
+```text
+01 Organization
+       ↓
+02 Project
+       ↓
+03 Flow
+       ↓
+04 Pipeline
+       ↓
+05 Agent
+       ↓
+06 Self-Hosted Agent
+       ↓
+07 Agent Pool
+       ↓
+08 Service Connection
+       ↓
+09 Entra ID + WIF
+       ↓
+10 ????
+```
+
+अब हमारी pipeline Azure से authenticate करने का पूरा foundation तैयार है।
+
+---
+
+# 🚀 Next Phase
+
+अगला practical step होना चाहिए:
+
+```text
+10 — First Real Azure Deployment Pipeline
+```
+
+और इसमें हम पहली बार पूरा end-to-end flow बनाएँगे:
+
+```text
+Git Push
+   ↓
+Azure DevOps Pipeline
+   ↓
+Agent
+   ↓
+Service Connection
+   ↓
+Microsoft Entra / WIF
+   ↓
+Azure RBAC
+   ↓
+Azure CLI
+   ↓
+Create / Verify Azure Resource
+```
+
+फिर इसी foundation पर:
+
+```text
+Terraform Pipeline
+```
+
+बनाएँगे:
+
+```text
+terraform init
+      ↓
+terraform validate
+      ↓
+terraform plan
+      ↓
+terraform apply
+```
+
+और बाद में यही flow हमारे **Axion Terraform project** के साथ connect करेंगे।
